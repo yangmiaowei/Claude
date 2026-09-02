@@ -8,11 +8,11 @@ import time
 import claude
 from claude.core.bus.commands import PongResult
 from claude.core.bus.envelope import JsonRpcError, JsonRpcSuccess
-from claude.core.config import Config
+from claude.core.config import ClaudeConfig
 
 
 # 同步入口：运行 ping 协程，连接失败时打印错误并退出
-def cmd_ping(config: Config) -> None:
+def cmd_ping(config: ClaudeConfig) -> None:
     try:
         asyncio.run(_ping(config))
     except (ConnectionRefusedError, OSError):
@@ -20,7 +20,7 @@ def cmd_ping(config: Config) -> None:
         sys.exit(1)
 
 # 向 core 守护进程发送 ping 请求，打印 pong 响应即延迟
-async def _ping(config: Config) -> None:
+async def _ping(config: ClaudeConfig) -> None:
     t0 = time.monotonic()
     reader, writer = await asyncio.open_connection(config.host, config.port)
 
