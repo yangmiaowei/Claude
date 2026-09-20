@@ -12,6 +12,11 @@ class JsonRpcRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
 
 
+class EventPushEnvelope(BaseModel):
+    kind: Literal["event"] = "event"
+    event: dict[str, Any]  # Event.model_dump() 的序列化结果
+
+
 class JsonRpcSuccess(BaseModel):
     jsonrpc: Literal["2.0"] = "2.0"
     id: str
@@ -40,3 +45,4 @@ INTERNAL_ERROR = -32603   # 服务器内部错误
 # 构造一个 JSON-RPC错误响应对象
 def make_error(id: str | None, code: int, message: str, data: Any = None) -> JsonRpcError:
     return JsonRpcError(id=id, error=JsonRpcErrorObject(code=code, message=message, data=data))
+    
