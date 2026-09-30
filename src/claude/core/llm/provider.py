@@ -41,6 +41,8 @@ class AnthropicProvider:
         tool_schemas: list[dict[str, object]],
         bus: EventBus,
         run_id: str,
+        *,
+        step: int = 0,
     ) -> LlmResponse:
         await bus.publish(
             LlmModelSelectedEvent(run_id=run_id, model=self._model, strategy="static", ts=_now())
@@ -106,3 +108,4 @@ class AnthropicProvider:
                 cache_creation_input_tokens=cache_create,
             ),
         )
+        
