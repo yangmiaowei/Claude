@@ -43,10 +43,10 @@ class CoreApp:
     def __init__(self) -> None:
         self._start_time = time.monotonic()
         self._bus = EventBus()
-        self._broadcaster: IpcEventBroadcaster() | None = None
+        self._broadcaster: IpcEventBroadcaster | None = None
         self._trace: TraceWriter | None = None
-        self._current_run_task: asyncio.Task[None] | None = None
         self._config: ClaudeConfig | None = None
+        self._running_runs: set[asyncio.Task[None]] = set()
 
     # 处理 core.ping 请求，返回服务版本、运行时长和接收时间
     async def _ping_handler(self, params: dict[str, Any]) -> PongResult:
@@ -77,15 +77,11 @@ class CoreApp:
     async def _agent_run_handler(self, params: dict[str, Any]) -> AgentRunResult:
         assert self._config is not None
         cmd = AgentRunCommand.model_validate(params)
-
-        if self._current_run_task is not None and not self._current_run_task.done():
-            raise RuntimeError("a run is already in progress")
-
         run_id = new_run_id()
         runner = AgentRunner(self._config, bus=self._bus, trace=self._trace)
-        self._current_run_task = asyncio.create_task(
-            runner.run(cmd.goal, run_id=run_id)
-        )
+        run_task = asyncio.create_task(runner.run(cmd.goal, run_id=run_id))
+        self._running_runs.add(run_task)
+        run_task.add_done_callback(self._running_runs.discard)
         return AgentRunResult(run_id=run_id)
 
     # 注册客户端事件订阅，可选先回放 events.jsonl 历史再接收实时流
@@ -143,16 +139,15 @@ class CoreApp:
             trace_path = Path(self._config.trace.file).expanduser()
             self._trace = TraceWriter(trace_path)
             await self._trace.start()
-            self._bus.subscribe(self._trace_event_handler)  # 埋点 3: EventBus层————CoreApp订阅者（trace 作为 EventBus 的订阅者挂上）
+            self._bus.subscribe(self._trace_event_handler)  # 埋点 3: EventBus层
 
-        self._broadcaster = IpcEventBroadcaster(trace=self._trace)  # 埋点 2: IPC层————IpcEventBroadcaster（每次成功推送事件后写一条 push 记录）
-        self._bus.subscribe(self._broadcaster.handle)
+        self._broadcaster = IpcEventBroadcaster(trace=self._trace)  # 埋点 2: IpcEventBroadcaster
 
         server = SocketServer(
             self._config.host,
             self._config.port,
             self._broadcaster,
-            trace=self._trace,  # 埋点 1: IPC层————SocketServer（收到命令时 + 发出响应时）
+            trace=self._trace,  # 埋点 1: SocketServer
         )
         server.register("core.ping", self._ping_handler)
         server.register("agent.run", self._agent_run_handler)
@@ -170,6 +165,10 @@ class CoreApp:
         await shutdown.wait()
 
         logger.info("shutting down")
+        for run_task in list(self._running_runs):
+            run_task.cancel()
+        if self._running_runs:
+            await asyncio.gather(*self._running_runs, return_exceptions=True)
         await server.stop()
         if self._trace is not None:
             await self._trace.stop()

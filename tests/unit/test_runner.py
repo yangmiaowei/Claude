@@ -75,6 +75,7 @@ async def _run(
         provider=provider or _EndTurnProvider(),  # type: ignore[arg-type]
         extra_handlers=[_collect],
         runs_dir=tmp_path,
+        trace=None,
     )
     await runner.run(goal)
     return collected
@@ -152,6 +153,7 @@ async def test_extra_handlers_receive_events(tmp_path: Path) -> None:
         provider=_EndTurnProvider(),  # type: ignore[arg-type]
         extra_handlers=[_second],
         runs_dir=tmp_path,
+        trace=None,
     )
     await runner.run("goal")
     assert len(secondary) > 0
@@ -194,6 +196,7 @@ async def test_injected_bus_receives_events(tmp_path: Path) -> None:
         bus=external_bus,
         provider=_EndTurnProvider(),  # type: ignore[arg-type]
         runs_dir=tmp_path,
+        trace=None,
     )
     await runner.run("goal")
 
