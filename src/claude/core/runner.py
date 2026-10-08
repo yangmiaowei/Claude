@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from claude.core.bus.events import RunFinishedEvent, RunStartedEvent
+from claude.core.compact.compactor import Compactor
 from claude.core.config import ClaudeConfig
 from claude.core.context import ExecutionContext
 from claude.core.events.bus import EventBus, EventHandler
@@ -14,6 +15,7 @@ from claude.core.events.writer import EventWriter
 from claude.core.llm.base import LLMProvider
 from claude.core.llm.provider import AnthropicProvider
 from claude.core.loop import AgentLoop
+from claude.core.memory.loader import load_context_file
 from claude.core.permissions.manager import PermissionManager
 from claude.core.runs import RUNS_DIR, new_run_id
 from claude.core.session.model import Session
@@ -113,6 +115,9 @@ class AgentRunner:
             notes = ""
         run_path.mkdir(parents=True, exist_ok=True)
 
+        global_ctx = load_context_file(Path("~/.claude/context.md").expanduser())
+        project_ctx = load_context_file(Path(".claude/context.md"))
+
         task_manager = TaskManager(run_path / ".tasks")
 
         bus = self._bus if self._bus is not None else EventBus()
@@ -125,6 +130,8 @@ class AgentRunner:
             max_steps=self._config.agent.max_steps,
             prefill_messages=history,
             session_notes=notes,
+            global_context=global_ctx,
+            project_context=project_ctx,
         )
         prefill_len = len(history)  # 本轮 run 开始时历史 messages 的长度
 
@@ -150,10 +157,19 @@ class AgentRunner:
                         self._trace,
                         include_payload=self._config.trace.include_llm_payload,
                     )
+                session_dir = (
+                    store.session_dir(session.id) 
+                    if session is not None and store is not None 
+                    else run_path
+                )
+                session_id_str = session.id if session is not None else ""
+                compactor = Compactor(bus, session_dir, session_id_str)
                 loop = AgentLoop(
                     provider, registry, bus,
                     permission_manager=self._permission_manager,
-                    session_id=session.id if session is not None else "",
+                    compactor=compactor,
+                    compact_threshold=self._config.compaction.auto_threshold,
+                    session_id=session_id_str,
                 )
                 await loop.run(context)
             except asyncio.CancelledError:

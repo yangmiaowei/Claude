@@ -24,6 +24,8 @@ from claude.core.bus.commands import (
     PongResult,
     SessionCloseCommand,
     SessionCloseResult,
+    SessionCompactCommand,
+    SessionCompactResult,
     SessionCreateCommand,
     SessionCreateResult,
     SessionGetHistoryCommand,
@@ -34,6 +36,7 @@ from claude.core.bus.commands import (
 from claude.core.bus.envelope import EventPushEnvelope
 from claude.core.config import ClaudeConfig, get_config
 from claude.core.events.bus import EventBus
+from claude.core.llm.provider import AnthropicProvider
 from claude.core.logging_setup import setup_logging
 from claude.core.permissions.manager import PermissionManager
 from claude.core.permissions.storage import load_policy_file
@@ -112,7 +115,7 @@ class CoreApp:
     async def _session_send_handler(self, params: dict[str, Any]) -> SessionSendMessageResult:
         assert self._sessions is not None
         cmd = SessionSendMessageCommand.model_validate(params)
-        run_id = await self._sessions.send_message(sid=cmd.session_id, content=cmd.content)
+        run_id = await self._sessions.send_message(cmd.session_id, cmd.content)
         return SessionSendMessageResult(run_id=run_id)
 
     # 返回 session 的完整 Anthropic messages 历史
@@ -125,15 +128,19 @@ class CoreApp:
     # 接收客户端权限审批响应，resolve 对应挂起的 Future
     async def _permission_respond_handler(self, params: dict[str, Any]) -> PermissionRespondResult:
         cmd = PermissionRespondCommand.model_validate(params)
-        logger.info(
-            "permission.respond received tool_use_id=%s decision=%s", 
-            cmd.tool_use_id, cmd.decision
-        )
+        logger.info("permission.respond received tool_use_id=%s decision=%s", cmd.tool_use_id, cmd.decision)
         if self._permission_manager is None:
             logger.error("permission.respond: PermissionManager not initialized")
             return PermissionRespondResult()
         self._permission_manager.respond(cmd.tool_use_id, cmd.decision)
         return PermissionRespondResult()
+
+    # 手动压缩 session thread，将摘要持久化写入 thread.jsonl
+    async def _session_compact_handler(self, params: dict[str, Any]) -> SessionCompactResult:
+        assert self._sessions is not None
+        cmd = SessionCompactCommand.model_validate(params)
+        result = await self._sessions.compact(cmd.session_id, cmd.focus)
+        return result  # type: ignore[no-any-return]
 
     # 关闭 session 并返回 closed 状态
     async def _session_close_handler(self, params: dict[str, Any]) -> SessionCloseResult:
@@ -203,7 +210,7 @@ class CoreApp:
             trace_path = Path(self._config.trace.file).expanduser()
             self._trace = TraceWriter(trace_path)
             await self._trace.start()
-            self._bus.subscribe(self._trace_event_handler)  # 埋点 3: EventBus层
+            self._bus.subscribe(self._trace_event_handler)
 
         policy_file = Path("~/.claude/policy.toml").expanduser()
         self._permission_manager = PermissionManager(
@@ -216,26 +223,29 @@ class CoreApp:
             len(load_policy_file(policy_file)),
         )
 
-        self._broadcaster = IpcEventBroadcaster(trace=self._trace)  # 埋点 2: IpcEventBroadcaster
+        self._broadcaster = IpcEventBroadcaster(trace=self._trace)
         self._bus.subscribe(self._broadcaster.handle)
         sessions_root = Path("~/.claude/sessions").expanduser()
         store = SessionStore(sessions_root)
+        assert self._config is not None
+        compact_provider = AnthropicProvider(self._config.llm.default_model)
         self._sessions = SessionManager(
             store,
             runner_factory=lambda: AgentRunner(
                 self._config,  # type: ignore[arg-type]
-                bus=self._bus, 
+                bus=self._bus,
                 trace=self._trace,
                 permission_manager=self._permission_manager,
             ),
             bus=self._bus,
+            provider=compact_provider,
         )
 
         server = SocketServer(
             self._config.host,
             self._config.port,
             self._broadcaster,
-            trace=self._trace,  # 埋点 1: SocketServer
+            trace=self._trace,
         )
         server.register("core.ping", self._ping_handler)
         server.register("agent.run", self._agent_run_handler)
@@ -245,6 +255,7 @@ class CoreApp:
         server.register("session.get_history", self._session_history_handler)
         server.register("session.close", self._session_close_handler)
         server.register("permission.respond", self._permission_respond_handler)
+        server.register("session.compact", self._session_compact_handler)
 
         addr = await server.start()
         logger.info("claude-core %s listening addr=%s", claude.__version__, addr)

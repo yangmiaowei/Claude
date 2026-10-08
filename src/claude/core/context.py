@@ -10,7 +10,9 @@ class ExecutionContext:
     goal: str
     max_steps: int
     prefill_messages: list[dict[str, Any]] = field(default_factory=list)
-    session_notes: str = ""   
+    session_notes: str = ""
+    global_context: str = ""
+    project_context: str = ""
     messages: list[dict[str, Any]] = field(default_factory=list)
     step: int = 0
     status: str = "running"  # "running" | "success" | "failed"
@@ -21,19 +23,23 @@ class ExecutionContext:
     def __post_init__(self) -> None:
         if self.prefill_messages:
             self.messages = [dict(m) for m in self.prefill_messages]
-        if not self.messages:
+        elif not self.messages:
             self.messages.append({"role": "user", "content": self.goal})
     
-    # 返回当前 run 的 system prompt，必要时注入 session notes
+    # 返回当前 run 的 system prompt，依次注入 global / project / session 三层记忆
     def system_prompt(self, base: str) -> str:
-        if not self.session_notes.strip():
-            return base
-        return (
-            base
-            + "\n\n## Session Notes\n"
-            + self.session_notes.strip()
-            + "\n\nRemember important durable facts by calling note_save."
-        )  # session_notes 拼进 system_prompt
+        parts = [base]
+        if self.global_context.strip():
+            parts.append("\n\n## Global Context\n" + self.global_context.strip())
+        if self.project_context.strip():
+            parts.append("\n\n## Project Context\n" + self.project_context.strip())
+        if self.session_notes.strip():
+            parts.append(
+                "\n\n## Session Notes\n"
+                + self.session_notes.strip()
+                + "\n\nRemember important durable facts by calling note_save."
+            )  # session_notes 拼进 system_prompt
+        return "".join(parts)
 
     # 将 LLM 响应的 content blocks 追加为 assistant 消息
     def add_assistant_message(self, content: list[Any]) -> None:

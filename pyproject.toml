@@ -40,7 +40,7 @@ dev = [
 # ---- Ruff：统一代码风格 ----
 [tool.ruff]
 src = ["src"]            # 分析路径，便于识别第一方代码
-line-length = 100        # 行长上限
+line-length = 120        # 行长上限
 target-version = "py312" # 语法/规则按 Python 3.12
 
 [tool.ruff.lint]
